@@ -1,0 +1,148 @@
+// Sequence Item
+class packet_item extends uvm_sequence_item;
+  rand bit [7:0] id;
+  rand bit [31:0] addr;
+  rand bit [31:0] data;
+  rand int delay_cycles; // delay between addr and data (1-10)
+
+  constraint valid_delay { delay_cycles inside {[1:10]}; }
+
+  `uvm_object_utils(packet_item)
+
+  function new(string name = "packet_item");
+    super.new(name);
+  endfunction
+
+  function void do_copy(uvm_object rhs);
+    packet_item rhs_;
+    if (!$cast(rhs_, rhs)) `uvm_fatal("COPY_FAIL", "Type cast failed")
+    super.do_copy(rhs);
+    this.id           = rhs_.id;
+    this.addr         = rhs_.addr;
+    this.data         = rhs_.data;
+    this.delay_cycles = rhs_.delay_cycles;
+  endfunction
+endclass
+
+// Sequence
+class packet_sequence extends uvm_sequence #(packet_item);
+  `uvm_object_utils(packet_sequence)
+
+  // ID Pool
+  static bit [7:0] free_id_q[$];
+
+  function new(string name = "packet_sequence");
+    super.new(name);
+  endfunction
+
+  // Initialize the ID pool
+  static function void init_ids();
+    if (free_id_q.size() == 0) begin
+      foreach (free_id_q[i]) free_id_q.delete(i);
+      for (int i = 0; i < 256; i++)
+        free_id_q.push_back(i);
+    end
+  endfunction
+
+  virtual task body();
+    packet_item pkt;
+    init_ids();
+
+    for (int i = 0; i < 5; i++) begin
+      pkt = packet_item::type_id::create("pkt");
+
+      // Wait until an ID is available
+      wait (free_id_q.size() > 0);
+      pkt.id = free_id_q.pop_front();
+
+      assert(pkt.randomize() with { id == pkt.id; });
+      start_item(pkt);
+      finish_item(pkt);
+    end
+  endtask
+
+  // External function to return ID back to pool
+  static function void release_id(bit [7:0] id);
+    free_id_q.push_back(id);
+  endfunction
+endclass
+
+// Driver
+class packet_driver extends uvm_driver #(packet_item);
+  `uvm_component_utils(packet_driver)
+
+  virtual dut_if vif;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual task run_phase(uvm_phase phase);
+    packet_item pkt;
+
+    forever begin
+      seq_item_port.get_next_item(pkt);
+      fork
+        drive_addr(pkt);
+        drive_data(pkt);
+      join_none
+      seq_item_port.item_done();
+    end
+  endtask
+
+  task drive_addr(packet_item pkt);
+    vif.avalid <= 1;
+    vif.a_id   <= pkt.id;
+    vif.addr   <= pkt.addr;
+    `uvm_info("DRIVER", $sformatf("Sent ADDR: id=%0d addr=0x%08X", pkt.id, pkt.addr), UVM_MEDIUM)
+    @(posedge vif.clk);
+    vif.avalid <= 0;
+  endtask
+
+  task drive_data(packet_item pkt);
+    repeat(pkt.delay_cycles) @(posedge vif.clk);
+    vif.dvalid <= 1;
+    vif.d_id   <= pkt.id;
+    vif.data   <= pkt.data;
+    `uvm_info("DRIVER", $sformatf("Sent DATA: id=%0d data=0x%08X", pkt.id, pkt.data), UVM_MEDIUM)
+    @(posedge vif.clk);
+    vif.dvalid <= 0;
+  endtask
+endclass
+
+// Monitor
+class packet_monitor extends uvm_component;
+  `uvm_component_utils(packet_monitor)
+
+  virtual dut_if vif;
+  uvm_analysis_port #(packet_item) ap;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+    ap = new("ap", this);
+  endfunction
+
+  virtual task run_phase(uvm_phase phase);
+    forever begin
+      @(posedge vif.clk);
+      if (vif.o_avalid && vif.o_dvalid) begin
+        packet_item pkt = packet_item::type_id::create("pkt");
+        pkt.id   = vif.o_d_id;
+        pkt.addr = vif.o_addr;
+        pkt.data = vif.o_data;
+        ap.write(pkt);
+        `uvm_info("MONITOR", $sformatf("RECEIVED OUT: id=%0d addr=0x%08X data=0x%08X", pkt.id, pkt.addr, pkt.data), UVM_MEDIUM)
+        packet_sequence::release_id(pkt.id);
+      end
+    end
+  endtask
+endclass
+
+----------------------------------------------------------------------------------------------------------------------------
+drive_data(pkt) now uses the packet directly (not the queue)
+
+No queue is used; each pkt manages its own id, data, and delay_cycles
+
+This lets multiple address/data pairs overlap with no enforced ordering
+
+Your testbench now properly reflects a DUT that supports out-of-order address/data flow.
