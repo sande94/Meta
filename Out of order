@@ -146,3 +146,27 @@ No queue is used; each pkt manages its own id, data, and delay_cycles
 This lets multiple address/data pairs overlap with no enforced ordering
 
 Your testbench now properly reflects a DUT that supports out-of-order address/data flow.
+.................................................................................................................................
+| Time | o\_avalid | o\_dvalid | o\_a\_id | o\_d\_id | o\_addr | o\_data    |
+| ---- | --------- | --------- | -------- | -------- | ------- | ---------- |
+| t₁   | ✔         | ✔         | 0x20     | 0x20     | 0x2000  | 0xBBBBBBB2 |
+| t₂   | ✔         | ✔         | 0x10     | 0x10     | 0x1000  | 0xAAAAAAA1 |
+
+ Scoreboard Behavior
+When each packet is generated in the driver, it sends:
+
+ID=10 → {addr=0x1000, data=0xAAAAAAA1}
+
+ID=20 → {addr=0x2000, data=0xBBBBBBB2}
+
+These go to expected_out_array[ID].
+
+✅ Matching in Scoreboard
+When monitor sees an output packet:
+
+Looks up ID=20 in expected_out_array, compares addr & data.
+
+Marks it PASS and deletes entry.
+
+Then sees ID=10, does the same.
+............................................................................................................................................
