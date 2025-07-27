@@ -1,0 +1,60 @@
+Q) expected_id_q ensures we preserve the order in which we expect packets to complete (even if outputs arrive out-of-order).
+explain more on this
+
+🔁 expected_id_q Ensures We Preserve the Order
+queue[int] expected_id_q;
+This queue stores packet IDs in the order the driver or test sent them — i.e., in the order the DUT is expected to process or retire them logically, 
+even if outputs come back out of order due to internal DUT latency.
+
+📦 Why Is This Queue Important?
+In UVM, the driver sends packets one after another, and each packet has a unique id.
+
+Monitor sees packets coming out of order, since the DUT may complete fast paths before slow ones.
+
+So we store IDs in a queue (expected_id_q) as a way to preserve the intention:
+
+“I sent ID 10 first, then 20, then 11...”
+
+So we expect the matching to happen in that logical order, even if the DUT spits out 20 before 10.
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+💡 Key Insight
+Without expected_id_q, if you just matched outputs as they came in, you'd be doing:
+
+first actual → try to match with any expected
+Which may be wrong if multiple IDs are outstanding and one arrives before the earlier one is ready.
+
+With expected_id_q, you're doing:
+
+first expected → wait for actual to match that ID
+
+This is safer in constrained out-of-order flows.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Order | ID | Addr   | Data       |
+| ----- | -- | ------ | ---------- |
+| 1     | 10 | 0x1000 | 0xAAAAAAA1 |
+| 2     | 20 | 0x2000 | 0xBBBBBBB2 |
+| 3     | 30 | 0x3000 | 0xCCCCCCC3 |
+===================================================================================================================
+So expected_id_q becomes:
+
+ini
+Copy
+Edit
+expected_id_q = {10, 20, 30}
+Now suppose the DUT output comes back as:
+
+ID 30
+
+ID 20
+
+ID 10
+
+That’s out of order.
+
+Your scoreboard still knows:
+
+“I’m expecting 10 first”, so:
+
+If 10 isn't available yet in actual_out_array, it waits (pushes it back)
+
+Then tries again next time write() is called
