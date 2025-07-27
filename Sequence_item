@@ -141,4 +141,84 @@ class packet_monitor extends uvm_component;
         packet_sequence::release_id(pkt.id);
       end
     end
-  endtask
+endtask
+.......................................................................................................................
+/*In your DUT, address and data can come at different times, and the order of data must match the order of addresses.
+
+That means:
+
+You might issue drive_addr(pkt) for pkt.id = 3 now...
+
+Then delay a few cycles (via repeat(pkt.delay_cycles))
+
+Then call drive_data(pkt)...
+
+But in between, other addresses might have been driven because drive_addr is inside a fork, which allows concurrent threads. */
+
+/* This means the address and delayed-data-driving run in parallel in background threads. Then, you immediately call:
+
+seq_item_port.item_done();
+So the driver is free to grab the next transaction from the sequencer in the next iteration of the loop.
+
+This is exactly how pipelining and concurrent transaction generation is simulated. */
+
+| Cycle | addr phase | data phase          |
+| ----- | ---------- | ------------------- |
+| 0     | addr pkt1  |                     |
+| 1     | addr pkt2  |                     |
+| 2     |            | data pkt2 (delay=1) |
+| 3     |            |                     |
+| 4     |            | data pkt1 (delay=3) |
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Cycle | Address Phase      | Data Phase         |
+| ----- | ------------------ | ------------------ |
+| 0     | `drive_addr(pkt1)` |                    |
+| 1     | `drive_addr(pkt2)` |                    |
+| 2     |                    | `drive_data(pkt2)` |
+| 3     |                    |                    |
+| 4     |                    | `drive_data(pkt1)` |
+Let’s assume:
+
+pkt1.id = 10, delay = 4
+
+pkt2.id = 20, delay = 1
+
+-----------------------------------------------------------
+At Cycle 0:
+pkt1 is passed to drive_addr(pkt1)
+
+in_order_data_storage.push_back(pkt1);
+This adds pkt1 to the back of the queue
+
+At Cycle 1:
+pkt2 arrives, goes through drive_addr(pkt2), and also gets:
+
+in_order_data_storage.push_back(pkt2);
+Now in_order_data_storage contains:
+
+[ pkt1, pkt2 ]
+
+At Cycle 2:
+drive_data(pkt2) fires because its delay was shorter
+
+BUT in drive_data:
+data = in_order_data_storage.pop_front();
+
+This pops pkt1, which was pushed first
+
+So even though pkt2 is ready, pkt1 is sent first — In order.
+
+If you push_back(pkt) at drive_addr(pkt) time, and pop_front() at data time, you're forcing in-order data, even if pkt2's delay is shorter.
+
+And your queue does exactly that:
+
+Even though pkt2 has a smaller delay,
+
+drive_data(pkt2) will pop and send pkt1’s data first
+
+This preserves the in-order constraint
+.........................................................................................
+
+
+
+
