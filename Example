@@ -1,0 +1,96 @@
+Without expected_id_q, if you just matched outputs as they came in, you'd be doing:
+
+first actual → try to match with any expected
+Which may be wrong if multiple IDs are outstanding and one arrives before the earlier one is ready.
+
+With expected_id_q, you're doing:
+
+first expected → wait for actual to match that ID
+
+This is safer in constrained out-of-order flows. can u give an example
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+🎯 Scenario: Out-of-Order Packet Completion
+The driver sends three packets in this order:
+| Send Order | Packet | ID | Addr   | Data       |
+| ---------- | ------ | -- | ------ | ---------- |
+| 1          | pkt1   | 10 | 0x1000 | 0xAAAAAAA1 |
+| 2          | pkt2   | 20 | 0x2000 | 0xBBBBBBB2 |
+| 3          | pkt3   | 30 | 0x3000 | 0xCCCCCCC3 |
+
+You expect the scoreboard to match them in the same order:
+expected_id_q = [10, 20, 30]
+But the DUT (due to internal delays) completes packets in this out-of-order sequence:
+
+| Time | Output Seen | ID |
+| ---- | ----------- | -- |
+| T1   | pkt3        | 30 |
+| T2   | pkt2        | 20 |
+| T3   | pkt1        | 10 |
+-----------------------------------------------------------------------------------------------------------------------
+❌ What Happens Without expected_id_q
+monitor.write(pkt3) → Scoreboard compares pkt3 to any expected.
+
+It might say “No mismatch” (even if pkt3 was expected third).
+
+monitor.write(pkt2) → Compares pkt2 to any available
+
+monitor.write(pkt1) → Compares pkt1 last
+
+💥 This breaks the intended send/receive flow order — because:
+
+It doesn’t enforce that pkt1 must match first
+
+You may get false positives if DUT messes up the order
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+✅ What Happens With expected_id_q
+Let’s go step by step:
+
+⏱ T1: pkt3 arrives from DUT
+monitor.write(pkt3) is called
+
+actual_out_array[30] = pkt3
+
+compare_data() checks:
+
+expected_id_q.front() = 10
+
+actual_out_array.has(10)? ❌ No → requeue 10
+
+Result: pkt3 waits, no match yet.
+
+⏱ T2: pkt2 arrives
+monitor.write(pkt2) is called
+
+actual_out_array[20] = pkt2
+
+compare_data() checks:
+
+expected_id_q.front() = 10
+
+actual_out_array.has(10)? ❌ No → requeue 10
+
+Still no match — waiting for pkt1.
+
+⏱ T3: pkt1 arrives
+monitor.write(pkt1) is called
+
+actual_out_array[10] = pkt1
+
+compare_data() now succeeds:
+
+Pops 10 from queue
+
+Compares expected[10] with actual[10] → ✅ Match
+
+Deletes both entries
+
+Then next call:
+
+expected_id_q.front() = 20
+
+actual[20] exists → match
+
+Then 30 → match
+
+✅ All packets matched in order of expectation, not order of arrival.
+
