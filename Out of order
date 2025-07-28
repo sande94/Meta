@@ -170,3 +170,31 @@ Marks it PASS and deletes entry.
 
 Then sees ID=10, does the same.
 ............................................................................................................................................
+Your current monitor will work correctly to capture out-of-order completions as long as both o_avalid and o_dvalid are asserted 
+in the same cycle and represent a completed transaction.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+If you're unsure about alignment, or if the DUT outputs address/data separately, consider splitting the monitor logic as shown above.
+
+packet_item pkt_map[int]; // associative array by id
+
+always @(posedge vif.clk) begin
+  if (vif.o_avalid) begin
+    pkt_map[vif.o_a_id].addr = vif.o_addr;
+    pkt_map[vif.o_a_id].id = vif.o_a_id;
+  end
+  if (vif.o_dvalid) begin
+    pkt_map[vif.o_d_id].data = vif.o_data;
+    pkt_map[vif.o_d_id].id = vif.o_d_id;
+
+    // Only write when both addr and data are available
+    if (pkt_map.exists(vif.o_d_id) && pkt_map[vif.o_d_id].addr !== 'x) begin
+      packet_item pkt = packet_item::type_id::create("pkt");
+      pkt.id   = pkt_map[vif.o_d_id].id;
+      pkt.addr = pkt_map[vif.o_d_id].addr;
+      pkt.data = pkt_map[vif.o_d_id].data;
+      ap.write(pkt);
+      pkt_map.delete(vif.o_d_id);
+    end
+  end
+end
